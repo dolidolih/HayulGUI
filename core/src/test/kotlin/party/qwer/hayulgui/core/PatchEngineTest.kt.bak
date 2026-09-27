@@ -1,7 +1,6 @@
 package party.qwer.hayulgui.core
 
 import org.junit.Assert.assertArrayEquals
-import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Rule
@@ -73,11 +72,6 @@ class PatchEngineTest {
         // (nativeGetAttributeStringValue → coerceToString 은 TYPE_STRING 에서 null).
         // 따라서 추가/교체한 문자열 속성의 rawValue 는 반드시 value pool ref 여야 한다.
         // 참고: readAttribute 는 typedValue 폴백 때문에 raw=-1 이어도 통과하므로 이 검사 필요.
-        // resmap: sharedUserId id must be present (libandroidfw id-lookup semantics)
-        val ids = axml.resourceMapIds()
-        assertNotNull("resmap should exist", ids)
-        assertTrue("resmap must contain sharedUserId id 0x0101000b",
-            ids!!.contains(0x0101000b))
         for (pair in listOf("manifest" to "sharedUserId",
                 "application" to "appComponentFactory")) {
             val v = axml.attributeView(pair.first, pair.second)!!

@@ -167,7 +167,7 @@ fun AppListScreen(modifier: Modifier) {
                             Column(Modifier.weight(1f)) {
                                 Text(f.name, style = MaterialTheme.typography.titleMedium,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("%.1f MB · ${f.kind.uppercase()}".format(f.size / 1048576.0),
+                                Text("%.1f MB · ${if (f.kind == "set") "split set" else f.kind.uppercase()}".format(f.size / 1048576.0),
                                     style = MaterialTheme.typography.labelSmall, color = AppColors.TextSub)
                             }
                             if (busyName == f.name) {

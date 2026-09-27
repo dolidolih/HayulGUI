@@ -42,8 +42,7 @@ class AxmlTest {
             val start = shortAtLocal(e, 24)
             val size = shortAtLocal(e, 26)
             (0 until n).count { i ->
-                String(ByteArray(0)) // no-op
-                poolName(doc, intAtLocal(e, 16 + start + size * i + 4)) == "sharedUserId"
+                doc.attrNameAt(e, 16 + start + size * i) == "sharedUserId"
             }
         }
         assertEquals(1, count)

@@ -2,6 +2,7 @@ package party.qwer.hayulgui.core
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume
 import org.junit.Rule
@@ -53,6 +54,11 @@ class RealApkTest {
 
         val axml = Axml.parse(PatchEngine.readEntryBytes(out, "AndroidManifest.xml")!!)
         assertEquals("party.qwer.irisgui", axml.readAttribute("manifest", "sharedUserId"))
+        // 실물 aapt2 파일은 resmap 을 쓰므로 sharedUserId 의 name 은 resmap index 여야
+        // 한다(libandroidfw 의 id 조달 조회). pool ref 로 남아있으면 PMS 가 무시한다.
+        val ids = axml.resourceMapIds()
+        assertNotNull(ids)
+        org.junit.Assert.assertTrue("resmap must contain 0x0101000b", ids!!.contains(0x0101000b))
         assertEquals(PatchEngine.STUB_FACTORY_CLASS,
             axml.readAttribute("application", "appComponentFactory"))
 

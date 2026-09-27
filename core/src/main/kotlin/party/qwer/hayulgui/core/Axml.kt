@@ -17,8 +17,38 @@ class Axml private constructor(
     val pool: StringPool,
     val chunks: MutableList<Chunk>,
 ) {
+    /** resmap 의 resource id 목록(test/diag 용). resmap chunk 없으면 null. */
+    fun resourceMapIds(): IntArray? = resMapIds()
+
     companion object {
         const val ANDROID_URI = "http://schemas.android.com/apk/res/android"
+
+        /**
+         * android:* 속성 이름 -> (aapt 불변의) 자원 id. resmap 확장/해석에 쓴다.
+         * 패치가 쓰는 sharedUserId/appComponentFactory 는 실파일 dump 로 확인한 값.
+         */
+        internal val ANDROID_ATTR_RES_IDS: Map<String, Int> = mapOf(
+            "theme" to 0x01010000,
+            "label" to 0x01010001,
+            "icon" to 0x01010002,
+            "name" to 0x01010003,
+            "sharedUserId" to 0x0101000b,
+            "enabled" to 0x0101000e,
+            "debuggable" to 0x0101000f,
+            "exported" to 0x01010010,
+            "versionCode" to 0x0101021b,
+            "versionName" to 0x0101021c,
+            "minSdkVersion" to 0x0101020c,
+            "targetSdkVersion" to 0x01010270,
+            "compileSdkVersion" to 0x01010572,
+            "compileSdkVersionCodename" to 0x01010573,
+            "appComponentFactory" to 0x0101057a,
+            "requiredSplitTypes" to 0x0101064e,
+            "splitTypes" to 0x0101064f,
+        )
+
+        private val ID_NAMES: Map<Int, String> =
+            ANDROID_ATTR_RES_IDS.entries.associate { (k, v) -> v to k }
 
         internal const val CHUNK_FILE = 0x0003
         internal const val CHUNK_POOL = 0x0001
@@ -198,6 +228,61 @@ class Axml private constructor(
 
     // ----------------------------------------------------------- element ops
 
+    /** resmap(RES_XML_RESOURCE_MAP) chunk 의 id 배열. 원본에 없으면 null. */
+    private fun resMapIds(): IntArray? {        val c = chunks.firstOrNull { it.type == CHUNK_MAP } ?: return null
+        val n = (intAt(c.data, 4) - 8) / 4
+        if (n <= 0) return IntArray(0)
+        return IntArray(n) { intAt(c.data, 8 + 4 * it) }
+    }
+
+    /**
+     * 추가하는 android:* 속성의 `name` 필드 값 = attr 이름 문자열의 POOL 인덱스.
+     *
+     * 실측(Android 12):
+     *  - Java XmlBlock 패키지파서(PackageParser/SharedUser 조인경로)는
+     *    indexOfAttribute 에서 속성 name 필드를 POOL 인덱스로 보고
+     *    문자열로 속성을 찾는다. 즉 name 은 반드시 그 문자열의 pool ref.
+     *  - libandroidfw 는 id 를 map[name] 으로 조달하므로, 포지셔널
+     *    불변식 map[k] == id(pool[k]) 가 성립해야 한다.
+     *  두 규칙을 동시에 만족시키는게 aapt1 산출물 레이아웃: 이름 문자열을
+     *    pool 에 intern 하고, resmap 의 그 슬롯에 attr id 를 둔다(gap 은 0).
+     *
+     * 실패사례 복기: raw=-1(값 못읽음) > name=map-index(풀 문자열 일치 실패)
+     * > id 재사용만(슬롯 불일치) 모두 조용히 무시됐다. 세 조건 다 만족해야
+     * sharedUserId 가 실제로 적용된다.
+     */
+    private fun nameRefFor(attr: String, poolNameRef: Int): Int {
+        val id = ANDROID_ATTR_RES_IDS[attr] ?: return poolNameRef
+        val nameRef = pool.intern(attr) // attr 이름 문자열 = POOL 인덱스 (이게 name 필드)
+        val c = chunks.firstOrNull { it.type == CHUNK_MAP } ?: return nameRef
+        val ids = resMapIds() ?: return nameRef
+        if (nameRef < ids.size) {
+            if (ids[nameRef] != id) putInt(c.data, 8 + 4 * nameRef, id)
+            return nameRef
+        }
+        // map 을 nameRef 를 덮도록 확장. 중간 gap 은 0(=그 위치가 attr 이름 아님).
+        val ext = ByteArray(8 + (nameRef + 1) * 4)
+        putShort(ext, 0, CHUNK_MAP)
+        putShort(ext, 2, 8)
+        putInt(ext, 4, ext.size)
+        for (i in ids.indices) putInt(ext, 8 + 4 * i, ids[i])
+        putInt(ext, 8 + 4 * nameRef, id)
+        c.data = ext
+        return nameRef
+    }
+
+    /** attr slot 이름 해석: name 은 pool ref. 범위 밖이면 resmap id->이름 폴백(과거 생성물/관측용). */
+    internal fun attrNameAt(e: ByteArray, o: Int): String? {
+        val name = intAt(e, o + 4)
+        pool.at(name)?.let { return it }
+        val ns = intAt(e, o)
+        if (ns >= 0 && pool.at(ns) == ANDROID_URI) {
+            val ids = resMapIds()
+            if (ids != null && name in ids.indices) return ID_NAMES[ids[name]]
+        }
+        return null
+    }
+
     private fun indexOfElement(name: String): Int {
         for (i in chunks.indices) {
             val c = chunks[i]
@@ -217,7 +302,7 @@ class Axml private constructor(
         val attrSize = shortAt(e, 26)
         repeat(attrCount) { i ->
             val o = 16 + attrStart + attrSize * i
-            if (pool.at(intAt(e, o + 4)) == attr) {
+            if (attrNameAt(e, o) == attr) {
                 val raw = intAt(e, o + 8)
                 if (raw != -1) pool.at(raw)?.let { return it }
                 val type = e[o + 15].toInt() and 0xFF
@@ -235,8 +320,8 @@ class Axml private constructor(
         return null
     }
 
-    /** attr 값과 ns reference 를 (값문자열, nsIndex, 타입) 으로 상세 조회. */
-    data class AttrView(val value: String?, val nsRef: Int, val dataType: Int, val data: Int)
+    /** attr 값과 ns reference 를 (값문자열, nsIndex, 타입, data, raw) 으로 상세 조회. */
+    data class AttrView(val value: String?, val nsRef: Int, val dataType: Int, val data: Int, val rawRef: Int)
 
     fun attributeView(element: String, attr: String): AttrView? {
         val ei = indexOfElement(element)
@@ -247,7 +332,7 @@ class Axml private constructor(
         val attrSize = shortAt(e, 26)
         repeat(attrCount) { i ->
             val o = 16 + attrStart + attrSize * i
-            if (pool.at(intAt(e, o + 4)) == attr) {
+            if (attrNameAt(e, o) == attr) {
                 val raw = intAt(e, o + 8)
                 val rawS = if (raw != -1) pool.at(raw) else null
                 val type = e[o + 15].toInt() and 0xFF
@@ -258,7 +343,7 @@ class Axml private constructor(
                     0x12 -> if (data != 0) "true" else "false"
                     else -> "0x" + Integer.toHexString(data)
                 }
-                return AttrView(shown, intAt(e, o), type, data)
+                return AttrView(shown, intAt(e, o), type, data, raw)
             }
         }
         return null
@@ -268,7 +353,7 @@ class Axml private constructor(
     fun setStringAttribute(element: String, attr: String, value: String) {
         val ei = indexOfElement(element)
         if (ei < 0) throw IllegalArgumentException("element not found: $element")
-        val nameRef = pool.intern(attr)
+        val nameRef = nameRefFor(attr, pool.intern(attr))
         val valueRef = pool.intern(value)
 
         val e = chunks[ei].data
@@ -278,8 +363,14 @@ class Axml private constructor(
 
         repeat(attrCount) { i ->
             val o = 16 + attrStart + attrSize * i
-            if (intAt(e, o + 4) == nameRef) {
-                putInt(e, o + 8, -1)
+            if (attrNameAt(e, o) == attr) {
+                // rawValue must be the value's string-pool reference: platform
+                // XmlBlock resolves *string* attribute values via rawValue
+                // (nativeGetAttributeStringValue), NOT via typedValue.data.
+                // Writing -1 makes getAttributeValue() return null (the
+                // typedValue fallback coerceToString(TYPE_STRING, ref) is null),
+                // so PMS silently ignores e.g. android:sharedUserId.
+                putInt(e, o + 8, valueRef)
                 putShort(e, o + 12, 8)
                 e[o + 14] = 0
                 e[o + 15] = TYPE_STRING.toByte()
@@ -289,25 +380,30 @@ class Axml private constructor(
 
         // 교체 대상이 없으면 append
         val already = (0 until attrCount).any { i ->
-            intAt(e, 16 + attrStart + attrSize * i + 4) == nameRef
+            attrNameAt(e, 16 + attrStart + attrSize * i) == attr
         }
         if (!already) {
             val ns = androidNsRef()
             val entry = ByteArray(attrSize)
             putInt(entry, 0, ns)
             putInt(entry, 4, nameRef)
-            putInt(entry, 8, -1)
+            putInt(entry, 8, valueRef) // see note above: rawValue = pool ref, not -1
             putShort(entry, 12, 8)
             entry[14] = 0
             entry[15] = TYPE_STRING.toByte()
             putInt(entry, 16, valueRef)
 
-            val insertAt = 16 + attrStart + attrSize * attrCount
+            // FRONT-INSERT: 실측(Android 12)으로 확인됨 — libandroidfw/XmlBlock 의
+            // (ns,name)->속성 조회 패스가 속성 배열의 “앞쪽 인덱스”만 id 조달로
+            // 만족시키는 경로의 정황상, 끝에 append 하면 PMS 조인 판정이
+            // 조용히 무시한다. ctl1-front-insert 그룹조인 / append 실패 실증.
+            val insertAt = 16 + attrStart
             val nd = ByteArray(e.size + attrSize)
-            e.copyInto(nd, 0, 0, insertAt)
+            e.copyInto(nd, 0, 0, insertAt) // 노드 헤더 + attr장 유지
             entry.copyInto(nd, insertAt)
             e.copyInto(nd, insertAt + attrSize, insertAt, e.size)
             putShort(nd, 28, attrCount + 1)
+            // indexAttributeCount는 손대지 않음 — 검증된 실측(wd4: front-insert, unchanged)과 동일형상
             putInt(nd, 4, intAt(nd, 4) + attrSize)
             chunks[ei] = Chunk(chunks[ei].type, nd)
         }

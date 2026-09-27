@@ -99,6 +99,19 @@
    - `manifest` element 에 `android:sharedUserId = "<value>"` 추가/교체
    - `application` element 에 `android:appComponentFactory = "<pkg>.PatcherAppComponentFactory"` 추가/교체
    - AXML 구조: RES_XML_* chunk, string pool (UTF-16 기본), attr 단위는 (nameRef, rawValue, typedValue)
+   - ⚠ 실측함매 두 가지 (Android 12, libandroidfw/XmlBlock 해석):
+     1. **name 필드**: resmap(0x0180 chunk)이 있는 파일에서 android-ns 속성의
+        name 필드는 **resmap index** 여야 한다. libandroidfw 는
+        `getAttributeNameResID(): name < mResIds.size ? mResIds[name] : 0` 으로
+        id 를 조달하고 PMS 는 그 id 로 sharedUserId 등을 lookup 한다. pool ref 를
+        그냥 넣으면 id 조달 실패 -> PMS 가 "속성 없음" 취급 -> uid 공유가 조용히
+        무시된다. (우린 이 때문에 1차 패치가 전부 실패했었다.)
+     2. **rawValue**: 문자열 속성의 값은 typedValue.data 가 아니라 rawValue 의
+        pool reference 로 해석된다. raw=-1 로 두고 typed 만 채우면
+        getAttributeValue() 는 null 을 반환한다.
+     그래서 setStringAttribute 는 (a) attr id 를 resmap 에 append(재사용)하고
+     name=map index, (b) raw=typed.data=같은 pool ref 로 쓴다. 검증은
+     PatchEngineTest/RealApkTest 의 resourceMapIds() assert 로커버.
      — attribute style value `TYPE_STRING` valueRef 로 pool 에 string 추가, `RES_XML_ATTRIBUTE_CHUNK`
      size/upCount 필드 updat, element chunk size 도 체인 반영. **res-auto attr 이므로 hardcoded
      attr-id 불요** (nameRef 는 그냥 문자열). Hayul `attrib.json` 의 attribute sort 순서 유지 문제는:

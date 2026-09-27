@@ -28,18 +28,14 @@ object ApkSources {
          *  split 없는 앱은 Download 로 single pull,
          *  split 앱은 전부 pull 하여 xapk 로 조립한 뒤 Download 에 push. */
         fun adbPullCommand(): String {
-            val apks = listOf(base) + splits
-            return if (splits.isEmpty()) {
-                "adb pull \"$base\" /sdcard/Download/$packageName.apk"
-            } else {
-                val locals = apks.mapIndexed { i, _ -> if (i == 0) "base.apk" else "split$i.apk" }
-                val pulls = apks.mapIndexed { i, p -> "adb pull \"$p\" ${locals[i]}" }
-                (listOf("mkdir -p /tmp/hayulgui-$packageName", "cd /tmp/hayulgui-$packageName") +
-                    pulls +
-                    listOf("zip -j $packageName.xapk ${locals.joinToString(" ")}",
-                        "adb push $packageName.xapk /sdcard/Download/"))
-                    .joinToString(" && ")
+            val dir = "/sdcard/Download/$packageName"
+            if (splits.isEmpty()) return "adb pull \"$base\" $dir.apk"
+            // split 세트: 디렉터리 하나에 base+split 을 모아 온다. zip 등 호스트 도구는 불요 —
+            // mkdir/`adb pull` 은 디바이스 측이라 adb 자체만 있으면 OS 무관.
+            val pulls = (listOf(base) + splits).map { p ->
+                "adb pull \"$p\" $dir/${p.substringAfterLast('/')}"
             }
+            return (listOf("adb shell mkdir -p $dir") + pulls).joinToString("\n")
         }
     }
 
@@ -81,10 +77,20 @@ object ApkSources {
                 val out2 = ArrayList<DownloadEntry>()
                 android.os.Environment.getExternalStoragePublicDirectory(
                     android.os.Environment.DIRECTORY_DOWNLOADS)
-                    ?.walkTopDown()?.forEach { f ->
-                        val kind = f.extension.lowercase()
-                        if (f.isFile && kind in setOf("apk", "xapk", "apkm"))
-                            out2.add(DownloadEntry(-1, f.name, kind, f.length(), f.lastModified()))
+                    ?.listFiles()?.forEach { f ->
+                        if (f.isDirectory) {
+                            val apks = f.listFiles { g -> g.isFile && g.name.lowercase().endsWith(".apk") }
+                                ?.toList() ?: emptyList()
+                            if (apks.isNotEmpty()) {
+                                val newest = apks.maxOf { it.lastModified() }
+                                out2.add(DownloadEntry(-1, f.name + "/", "set",
+                                    apks.sumOf { it.length() }, newest))
+                            }
+                        } else {
+                            val kind = f.extension.lowercase()
+                            if (f.isFile && kind in setOf("apk", "xapk", "apkm"))
+                                out2.add(DownloadEntry(-1, f.name, kind, f.length(), f.lastModified()))
+                        }
                     }
                 return out2.sortedByDescending { it.mtime }
             }
@@ -130,6 +136,18 @@ object ApkSources {
     fun stageDownload(context: Context, entry: DownloadEntry, stagingDir: File): List<File> {
         stagingDir.deleteRecursively()
         stagingDir.mkdirs()
+        if (entry.kind == "set") {
+            // Download 내 split-set 디렉터리 — base.apk 우선으로 그대로 사용 (재복사 불요)
+            val dir = File(android.os.Environment
+                .getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS),
+                entry.name.removeSuffix("/"))
+            val apks = dir.listFiles { f -> f.isFile && f.name.lowercase().endsWith(".apk") }
+                ?.toList() ?: emptyList()
+            if (apks.isEmpty()) throw IllegalStateException("디렉터리에 apk 가 없습니다: $dir")
+            val base = apks.firstOrNull { it.name.equals("base.apk", true) }
+                ?: apks.first()
+            return (listOf(base) + apks.filter { it != base }.sortedBy { it.name })
+        }
         val archive = File(stagingDir, safeName(entry.name))
         if (entry.id >= 0) {
             context.contentResolver.openInputStream(
