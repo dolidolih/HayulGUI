@@ -61,7 +61,10 @@ fun InstallGuideScreen(modifier: Modifier) {
                     Column(Modifier.weight(1f)) {
                         Text(m.packageName, style = MaterialTheme.typography.titleMedium,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("v${m.versionCode} · ${m.files.count { it.endsWith(".apk") }} apk · uid ${m.sharedUserId}",
+                        Text("v${m.versionCode} · ${fmtDate(m.createdAt)} · " +
+                            (if (m.files.count { it.endsWith(".apk") } > 1)
+                                "${m.files.count { it.endsWith(".apk") }} apk · " else "") +
+                            "uid ${m.sharedUserId}",
                             style = MaterialTheme.typography.labelSmall, color = AppColors.TextSub,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }

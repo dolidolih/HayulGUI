@@ -97,10 +97,14 @@ fun AppListScreen(modifier: Modifier) {
 
     fun reloadTab() {
         scope.launch {
-            if (tabExtract)
-                apps = withContext(Dispatchers.IO) { runCatching { ApkSources.installedApps(context) }.getOrDefault(emptyList()) }
-            else
+            if (tabExtract) {
+                apps = withContext(Dispatchers.IO) {
+                    runCatching { ApkSources.installedApps(context) }.getOrDefault(emptyList())
+                        .filter { !it.systemApp }   // OS/사전 설치 앱(ex com.google.*) 제외
+                }
+            } else {
                 files = withContext(Dispatchers.IO) { runCatching { ApkSources.downloads(context) }.getOrDefault(emptyList()) }
+            }
         }
     }
     LaunchedEffect(tabExtract) { reloadTab() }
@@ -167,7 +171,8 @@ fun AppListScreen(modifier: Modifier) {
                             Column(Modifier.weight(1f)) {
                                 Text(f.name, style = MaterialTheme.typography.titleMedium,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text("%.1f MB · ${if (f.kind == "set") "split set" else f.kind.uppercase()}".format(f.size / 1048576.0),
+                                Text("%.1f MB · %s · %s".format(f.size / 1048576.0,
+                                    if (f.kind == "set") "split set" else f.kind.uppercase(), fmtDate(f.mtime)),
                                     style = MaterialTheme.typography.labelSmall, color = AppColors.TextSub)
                             }
                             if (busyName == f.name) {

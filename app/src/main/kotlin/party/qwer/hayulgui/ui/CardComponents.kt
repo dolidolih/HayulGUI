@@ -304,3 +304,8 @@ fun SectionTitle(
         trailing = trailing
     )
 }
+
+/** epoch millis → "26-09-27 18:30" (korea locale-friendly, no android import to keep pure) */
+fun fmtDate(ms: Long): String =
+    if (ms <= 0L) "—" else java.text.SimpleDateFormat("yy-MM-dd HH:mm", java.util.Locale.KOREA)
+        .format(java.util.Date(ms))
