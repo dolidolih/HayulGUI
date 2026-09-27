@@ -88,7 +88,7 @@ object ApkSources {
                             }
                         } else {
                             val kind = f.extension.lowercase()
-                            if (f.isFile && kind in setOf("apk", "xapk", "apkm"))
+                            if (f.isFile && kind in setOf("apk", "xapk", "apkm", "apks"))
                                 out2.add(DownloadEntry(-1, f.name, kind, f.length(), f.lastModified()))
                         }
                     }
@@ -101,7 +101,7 @@ object ApkSources {
                 .getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
             dir?.listFiles()?.forEach { f ->
                 val kind = f.extension.lowercase()
-                if (f.isFile && kind in setOf("apk", "xapk", "apkm"))
+                if (f.isFile && kind in setOf("apk", "xapk", "apkm", "apks"))
                     out.add(DownloadEntry(-1, f.name, kind, f.length(), f.lastModified()))
             }
             return out.sortedByDescending { it.mtime }
@@ -117,13 +117,13 @@ object ApkSources {
         runCatching {
             context.contentResolver.query(
                 MediaStore.Files.getContentUri("external"), proj, sel,
-                arrayOf("%.apk", "%.xapk", "%.apkm"),
+                arrayOf("%.apk", "%.xapk", "%.apkm", "%.apks"),
                 "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC",
             )?.use { c ->
                 while (c.moveToNext()) {
                     val id = c.getLong(0); val name = c.getString(1) ?: continue
                     val kind = name.substringAfterLast('.').lowercase()
-                    if (kind !in setOf("apk", "xapk", "apkm")) continue
+                    if (kind !in setOf("apk", "xapk", "apkm", "apks")) continue
                     out.add(DownloadEntry(id, name, kind,
                         c.getLong(2), c.getLong(3) * 1000L))
                 }
@@ -174,31 +174,67 @@ object ApkSources {
         return finishStaging(archive, stagingDir)
     }
 
-    private fun finishStaging(archive: File, stagingDir: File): List<File> {
+    internal fun finishStaging(archive: File, stagingDir: File): List<File> {
         val kind = archive.name.substringAfterLast('.', "").lowercase()
         if (kind == "apk") return listOf(archive)
         val dir = File(stagingDir, "unpacked")
         dir.mkdirs()
+        val nested = ArrayList<File>()
         java.util.zip.ZipInputStream(java.io.FileInputStream(archive)).use { zin ->
             while (true) {
                 val e = zin.nextEntry ?: break
                 if (e.isDirectory) continue
                 val n = e.name.substringAfterLast('/')
-                if (!n.lowercase().endsWith(".apk")) continue
-                File(dir, n).outputStream().use { zin.copyTo(it) }
+                val ln = n.lowercase()
+                when {
+                    ln.endsWith(".apk") -> File(dir, n).outputStream().use { zin.copyTo(it) }
+                    // apkm: 실제 apk 세트를 안쪽에 zip으로 감추는 경우가 있음 — 한 번 더 푼다
+                    setOf(".xapk", ".apks", ".apkm", ".zip").any { ln.endsWith(it) } -> nested +=
+                        File(dir, "nested_" + nested.size + ".zip").also { f -> zin.copyTo(f.outputStream()) }
+                }
             }
         }
-        val apks = dir.listFiles { f -> f.isFile && f.name.lowercase().endsWith(".apk") }
+        var apks = dir.listFiles { f: File -> f.isFile && f.name.lowercase().endsWith(".apk") }
             ?.toList() ?: emptyList()
+        if (apks.isEmpty() && nested.isNotEmpty()) {
+            for (nz in nested) apks = unpackInto(nz, dir) + apks
+        }
         if (apks.isEmpty()) {
             // unpack 실패 = 사실 zip 이 아닌 apk 더미? .apk 로 rename 하고 단일 파일 취급.
             val single = File(stagingDir, "base.apk")
             if (!single.name.equals(archive.name)) archive.copyTo(single, overwrite = true)
             return listOf(single)
         }
+        // base: exact base.apk > apkmirror 의 base.x.apk > 단 하나
         val base = apks.firstOrNull { it.name.equals("base.apk", true) }
-            ?: apks.singleOrNull() ?: throw IllegalStateException("base.apk 를 찾을 수 없습니다 (${apks.size}개)")
-        return (listOf(base) + apks.filter { it != base })
+            ?: apks.firstOrNull { Regex("^base(\\.[\\w-]+)?\\.apk$", RegexOption.IGNORE_CASE).matches(it.name) }
+            ?: apks.singleOrNull()
+            ?: throw IllegalStateException("base.apk 를 찾을 수 없습니다 (${apks.joinToString { it.name }})")
+        // 패키지 다른 이물질(apkm 의 pure_installer.apk 등) 배제 — 판독 불가 conservative 유지
+        val basePkg = packageOf(base)
+        val mine = apks.filter { it == base || basePkg == null ||
+            runCatching { packageOf(it) == basePkg }.getOrDefault(true) }
+        val dropped = apks - mine.toSet()
+        if (dropped.isNotEmpty())
+            Logx.i("staging: base와 패키지 다른 항목 배제: ${dropped.joinToString { it.name }}")
+        return (listOf(base) + mine.filter { it != base }.sortedBy { it.name })
+    }
+
+    private fun unpackInto(nestedZip: File, into: File): List<File> {
+        val out = ArrayList<File>()
+        java.util.zip.ZipInputStream(java.io.FileInputStream(nestedZip)).use { zin ->
+            while (true) {
+                val e = zin.nextEntry ?: break
+                if (e.isDirectory) continue
+                val n = e.name.substringAfterLast('/')
+                if (n.lowercase().endsWith(".apk")) {
+                    val f = File(into, n)
+                    f.outputStream().use { zin.copyTo(it) }
+                    out += f
+                }
+            }
+        }
+        return out
     }
 
     private fun safeName(n: String) = n.replace(Regex("[/\\:]"), "_")

@@ -193,7 +193,7 @@ object PatchEngine {
                 appendLine("   adb -s <serial> install-multiple -r ${outputs.joinToString(" ") { it.name }}")
             }
             appendLine()
-            appendLine("PC 없이 기기 설치만 가능하면: split 은 반드시 adb 필요 (installer 탭 불가)")
+            appendLine("PC 없이 설치: HayulGUI 설치 탭의 세션 설치(base+split 단일 커밋)를 사용")
         }
         File(req.outDir, "install.txt").writeText(txt)
     }
