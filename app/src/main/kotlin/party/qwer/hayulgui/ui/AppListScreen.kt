@@ -95,9 +95,24 @@ fun AppListScreen(modifier: Modifier) {
         }
     }
 
-    LaunchedEffect(tabExtract) {
-        if (tabExtract) apps = withContext(Dispatchers.IO) { runCatching { ApkSources.installedApps(context) }.getOrDefault(emptyList()) }
-        else files = withContext(Dispatchers.IO) { runCatching { ApkSources.downloads(context) }.getOrDefault(emptyList()) }
+    fun reloadTab() {
+        scope.launch {
+            if (tabExtract)
+                apps = withContext(Dispatchers.IO) { runCatching { ApkSources.installedApps(context) }.getOrDefault(emptyList()) }
+            else
+                files = withContext(Dispatchers.IO) { runCatching { ApkSources.downloads(context) }.getOrDefault(emptyList()) }
+        }
+    }
+    LaunchedEffect(tabExtract) { reloadTab() }
+
+    // settings(전체파일 접근)에서 돌아오면 즉시 갱신
+    val le = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(le) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
+            if (ev == androidx.lifecycle.Lifecycle.Event.ON_RESUME && !tabExtract) reloadTab()
+        }
+        le.lifecycle.addObserver(obs)
+        onDispose { le.lifecycle.removeObserver(obs) }
     }
 
     Column(modifier.fillMaxSize().padding(ScreenPadding), verticalArrangement = Arrangement.spacedBy(10.dp)) {
