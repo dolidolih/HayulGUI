@@ -81,7 +81,15 @@ object ApkInstaller {
                 val msg = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
                 when {
                     status == STATUS_PENDING_USER_ACTION -> {
-                        // 시스템 설치 창 떠서 대기 — 확인 후 최종 결과 브로드캐스트 재수신
+                        // 시스템이 확인 다이얼로그용 Intent 를 EXTRA_INTENT 에 담아 보낸다 —
+                        // app 이 startActivity 로 띄워야 한다 (미호출 시 dialogs 없이 영원 대기).
+                        val confirm = i.getParcelableExtra(Intent.EXTRA_INTENT) as? Intent
+                        if (confirm != null) {
+                            confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            runCatching { c.startActivity(confirm) }
+                                .onFailure { finish(false, "설치 창 호출 실패: ${it.message}") }
+                        }
+                        // 확인 후 FINAL status 가 같은 rx 로 재브로드캐스트됨
                     }
                     status == STATUS_SUCCESS -> finish(true, null)
                     status != Int.MIN_VALUE -> finish(false, describe(status, msg))
