@@ -24,11 +24,23 @@ object ApkSources {
         val ownPackage: Boolean,
         val readable: Boolean,
     ) {
-        /** 어시스트 카드에 띄울 adb pull 명령 (기기 root/adbd 필요). */
-        fun adbPullCommand(): String =
-            (listOf(base) + splits).joinToString(" && ") {
-                "adb pull \"$it\""
+        /** 어시스트 카드에 띄울 adb 명령.
+         *  split 없는 앱은 Download 로 single pull,
+         *  split 앱은 전부 pull 하여 xapk 로 조립한 뒤 Download 에 push. */
+        fun adbPullCommand(): String {
+            val apks = listOf(base) + splits
+            return if (splits.isEmpty()) {
+                "adb pull \"$base\" /sdcard/Download/$packageName.apk"
+            } else {
+                val locals = apks.mapIndexed { i, _ -> if (i == 0) "base.apk" else "split$i.apk" }
+                val pulls = apks.mapIndexed { i, p -> "adb pull \"$p\" ${locals[i]}" }
+                (listOf("mkdir -p /tmp/hayulgui-$packageName", "cd /tmp/hayulgui-$packageName") +
+                    pulls +
+                    listOf("zip -j $packageName.xapk ${locals.joinToString(" ")}",
+                        "adb push $packageName.xapk /sdcard/Download/"))
+                    .joinToString(" && ")
             }
+        }
     }
 
     fun installedApps(context: Context): List<InstalledApp> {

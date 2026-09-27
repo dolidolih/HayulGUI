@@ -41,13 +41,15 @@ object Artifacts {
         if (!outDir.canonicalFile.equals(target.canonicalFile)) {
             createRoots(filesDir).mkdirs()
             outDir.copyRecursively(target, overwrite = true)
+            // 임시 staging(예: _pending)은 정리하지 않으면 list 에 중복 항목으로 잡힌다
+            outDir.deleteRecursively()
         }
         return meta.copy(id = id, dir = target)
     }
 
     fun list(filesDir: File): List<Meta> {
         val root = createRoots(filesDir)
-        val dirs = root.listFiles { f -> f.isDirectory } ?: return emptyList()
+        val dirs = root.listFiles { f -> f.isDirectory && !f.name.startsWith("_") } ?: return emptyList()
         return dirs.mapNotNull { d ->
             try {
                 val p = Properties().apply { File(d, "meta.properties").inputStream().use { load(it) } }
