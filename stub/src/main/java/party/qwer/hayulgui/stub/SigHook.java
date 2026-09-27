@@ -26,6 +26,9 @@ final class SigHook {
 
     private static final String TAG = "HayulGUI";
 
+    /** ServiceManager 캐시 바인더 래핑 — 안전성 검증 전까지 off (crash cause). */
+    private static final boolean ENABLE_SERVICE_CACHE_HOOK = false;
+
     private final byte[] certDer;
     private volatile String targetPackage;
     private volatile boolean installed;
@@ -81,8 +84,12 @@ final class SigHook {
             sf.set(null, wrapper);
         }
 
-        // (2) ServiceManager 의 "package" 바인더 캐시 (버전별 필드 상이 — best effort)
-        hookServiceManagerCache();
+        // (2) ServiceManager cache hook — OFF by default.
+        // The cache entry must stay an IBinder; a Proxy implementing
+        // IPackageManager crashes OEM code that casts it back (e.g. Oplus
+        // OplusCommonManager -> "$Proxy5 cannot be cast to IBinder"). The
+        // sPackageManager wrapper above already covers app-level PM calls.
+        if (ENABLE_SERVICE_CACHE_HOOK) hookServiceManagerCache();
     }
 
     /** ServiceManager 내부 캐시(sCache / sServiceCache)의 "package" 엔트리를 교체. */
