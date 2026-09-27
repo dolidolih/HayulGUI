@@ -1,0 +1,187 @@
+package party.qwer.hayulgui.ui
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import party.qwer.hayulgui.AppColors
+import party.qwer.hayulgui.HayulOps
+import party.qwer.hayulgui.HayulState
+import party.qwer.hayulgui.core.ApkSources
+
+private fun Uri.nameFromUri(ctx: Context): String {
+    var name: String? = lastPathSegment?.substringAfterLast('/')
+    if (name == null || !name.contains('.')) runCatching {
+        ctx.contentResolver.query(this, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) name = it.getString(0)
+        }
+    }
+    return name ?: "picked.apk"
+}
+
+/** 앱목록 — [앱 추출(ADB)] / [Downloads] 두 탭. */
+@Composable
+fun AppListScreen(modifier: Modifier) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var tabExtract by remember { mutableStateOf(true) }
+    var apps by remember { mutableStateOf<List<ApkSources.InstalledApp>>(emptyList()) }
+    var files by remember { mutableStateOf<List<ApkSources.DownloadEntry>>(emptyList()) }
+    var busyName by remember { mutableStateOf<String?>(null) }
+
+    val staging = remember { java.io.File(context.filesDir, "input") }
+
+    /** staged 파일 세트로 패치 실행. */
+    fun runPatch(staged: List<java.io.File>, label: String) {
+        scope.launch {
+            if (HayulState.busy) return@launch
+            busyName = label
+            val outcome = runCatching {
+                HayulState.inputFiles = staged
+                HayulState.inputPackage =
+                    withContext(Dispatchers.IO) { ApkSources.packageOf(staged.first()) } ?: ""
+                withContext(Dispatchers.IO) {
+                    if (!HayulState.keyExists) HayulState.ensureKey(context)
+                    HayulOps.patchCurrentInput(context)
+                }
+            }
+            busyName = null
+            outcome.onSuccess {
+                Toast.makeText(context, "패치 완료 — 설치 탭으로 이동", Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(context, "패치 실패: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    val adder = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) scope.launch {
+            runCatching {
+                val staged = withContext(Dispatchers.IO) {
+                    // 첫 항목은 unpack 가능 아카이드로 처리, 나머지는 split apk 로 추가
+                    val first = uris.first()
+                    val name = first.nameFromUri(context)
+                    var set = ApkSources.stageUri(context, first, name, staging)
+                    if (uris.size > 1) {
+                        uris.drop(1).forEachIndexed { idx, u ->
+                            val f = java.io.File(staging, "split${'$'}{idx + 1}.apk")
+                            context.contentResolver.openInputStream(u)?.use { i -> f.outputStream().use { i.copyTo(it) } }
+                            if (f.isFile && !set.contains(f)) set = set + f
+                        }
+                    }
+                    set
+                }
+                runPatch(staged, "선택한 파일")
+            }.onFailure { Toast.makeText(context, "불러오기 실패: ${'$'}{it.message}", Toast.LENGTH_LONG).show() }
+        }
+    }
+
+    LaunchedEffect(tabExtract) {
+        if (tabExtract) apps = withContext(Dispatchers.IO) { runCatching { ApkSources.installedApps(context) }.getOrDefault(emptyList()) }
+        else files = withContext(Dispatchers.IO) { runCatching { ApkSources.downloads(context) }.getOrDefault(emptyList()) }
+    }
+
+    Column(modifier.fillMaxSize().padding(ScreenPadding), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            SegmentedButton(selected = tabExtract, onClick = { tabExtract = true },
+                shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("앱 추출 (ADB)") }
+            SegmentedButton(selected = !tabExtract, onClick = { tabExtract = false },
+                shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Downloads") }
+        }
+
+        if (tabExtract) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(apps) { app ->
+                    SurfaceCard(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(app.label, style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(app.packageName, style = MaterialTheme.typography.labelSmall,
+                                    color = AppColors.TextSub, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            TextButton(onClick = {
+                                val cmd = app.adbPullCommand()
+                                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                                    .setPrimaryClip(ClipData.newPlainText("adb", cmd))
+                                Toast.makeText(context, "adb pull 명령 복사됨", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp)); Text("복사")
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (ApkSources.needsAllFiles(context)) item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("파일 목록 보려면 ", style = MaterialTheme.typography.bodySmall, color = AppColors.TextSub)
+                        TextButton(onClick = {
+                            runCatching {
+                                context.startActivity(android.content.Intent(
+                                    android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                    Uri.parse("package:" + context.packageName)))
+                            }
+                        }) { Text("전체파일 접근 허용") }
+                    }
+                }
+                items(files) { f ->
+                    SurfaceCard(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(f.name, style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("%.1f MB · ${f.kind.uppercase()}".format(f.size / 1048576.0),
+                                    style = MaterialTheme.typography.labelSmall, color = AppColors.TextSub)
+                            }
+                            if (busyName == f.name) {
+                                CircularProgressIndicator(Modifier.size(22.dp), color = AppColors.PrimaryAccent)
+                            } else {
+                                Button(
+                                    enabled = busyName == null,
+                                    onClick = { scope.launch {
+                                        runCatching {
+                                            withContext(Dispatchers.IO) { ApkSources.stageDownload(context, f, staging) }
+                                        }.onSuccess { staged -> runPatch(staged, f.name) }
+                                            .onFailure { Toast.makeText(context, "불러오기 실패: ${it.message}", Toast.LENGTH_LONG).show() }
+                                    } },
+                                ) { Text("패치") }
+                            }
+                        }
+                    }
+                }
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (files.isEmpty()) "Downloads 비어있음 " else "목록 아래처럼 직접 선택 가능 ",
+                            style = MaterialTheme.typography.bodySmall, color = AppColors.TextSub)
+                        TextButton(onClick = { adder.launch(arrayOf("application/vnd.android.package-archive", "application/apk",
+                            "application/vnd.android.package-archive+xapk", "application/zip", "application/octet-stream", "*/*")) }) {
+                            Icon(Icons.Default.Add, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("파일 선택")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
