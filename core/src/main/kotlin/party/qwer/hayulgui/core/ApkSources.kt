@@ -24,9 +24,9 @@ object ApkSources {
         val ownPackage: Boolean,
         val readable: Boolean,
     ) {
-        /** 어시스트 카드에 띄울 adb 명령.
+        /** 어시스트 카드에 띄울 adb 명령 (adb 만 사용 — 호스트 OS 무관).
          *  split 없는 앱은 Download 로 single pull,
-         *  split 앱은 전부 pull 하여 xapk 로 조립한 뒤 Download 에 push. */
+         *  split 앱은 Download 하위 디렉터리에 base+split 전부 pull. */
         fun adbPullCommand(): String {
             val dir = "/sdcard/Download/$packageName"
             if (splits.isEmpty()) return "adb pull \"$base\" $dir.apk"
