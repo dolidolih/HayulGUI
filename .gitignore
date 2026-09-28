@@ -19,3 +19,6 @@ ref_project/
 
 # logs / scratch
 *.log
+
+keystore/
+keystore.properties

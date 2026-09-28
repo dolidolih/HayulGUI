@@ -4,22 +4,43 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// 릴리스 서명은 로컬 keystore.properties 만 사용 (gitignore — 절대 커밋 금지)
+import java.util.Properties
+val keystoreProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
 android {
     namespace = "party.qwer.hayulgui"
     compileSdk = 35
+
+    signingConfigs {
+        if (keystoreProps.isNotEmpty()) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "party.qwer.hayulgui"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (keystoreProps.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
@@ -42,7 +63,7 @@ android {
         outputs.configureEach {
             if (buildType.name == "release") {
                 (this as? com.android.build.gradle.internal.api.BaseVariantOutputImpl)
-                    ?.outputFileName = "HayulGUI-v${versionName}.apk"
+                    ?.outputFileName = "HayulGUI.apk"
             }
         }
     }
