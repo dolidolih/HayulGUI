@@ -27,6 +27,7 @@ import party.qwer.hayulgui.AppColors
 import party.qwer.hayulgui.HayulOps
 import party.qwer.hayulgui.HayulState
 import party.qwer.hayulgui.core.ApkSources
+import party.qwer.hayulgui.core.PatchEngine
 
 private fun Uri.nameFromUri(ctx: Context): String {
     var name: String? = lastPathSegment?.substringAfterLast('/')
@@ -50,20 +51,21 @@ fun AppListScreen(modifier: Modifier) {
 
     val staging = remember { java.io.File(context.filesDir, "input") }
 
-    /** staged 파일 세트로 패치 실행. */
-    fun runPatch(staged: List<java.io.File>, label: String) {
+    /** staged 파일 세트 패치 본체 (IO 컨텍스트에서 호출). */
+    suspend fun patchStaged(staged: List<java.io.File>): PatchEngine.Result =
+        withContext(Dispatchers.IO) {
+            HayulState.inputFiles = staged
+            HayulState.inputPackage = ApkSources.packageOf(staged.first()) ?: ""
+            if (!HayulState.keyExists) HayulState.ensureKey(context)
+            HayulOps.patchCurrentInput(context)
+        }
+
+    /** 라벨→busy 즉시 반영. 무거운 작업은 calling coroutine/withContext 안에서. */
+    fun withBusy(label: String, block: suspend () -> Unit) {
+        if (HayulState.busy) return
+        busyName = label
         scope.launch {
-            if (HayulState.busy) return@launch
-            busyName = label
-            val outcome = runCatching {
-                HayulState.inputFiles = staged
-                HayulState.inputPackage =
-                    withContext(Dispatchers.IO) { ApkSources.packageOf(staged.first()) } ?: ""
-                withContext(Dispatchers.IO) {
-                    if (!HayulState.keyExists) HayulState.ensureKey(context)
-                    HayulOps.patchCurrentInput(context)
-                }
-            }
+            val outcome = runCatching { block() }
             busyName = null
             outcome.onSuccess {
                 Toast.makeText(context, "패치 완료 — 설치 탭으로 이동", Toast.LENGTH_LONG).show()
@@ -74,24 +76,30 @@ fun AppListScreen(modifier: Modifier) {
     }
 
     val adder = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) scope.launch {
-            runCatching {
-                val staged = withContext(Dispatchers.IO) {
-                    // 첫 항목은 unpack 가능 아카이드로 처리, 나머지는 split apk 로 추가
-                    val first = uris.first()
-                    val name = first.nameFromUri(context)
-                    var set = ApkSources.stageUri(context, first, name, staging)
-                    if (uris.size > 1) {
-                        uris.drop(1).forEachIndexed { idx, u ->
-                            val f = java.io.File(staging, "split${'$'}{idx + 1}.apk")
-                            context.contentResolver.openInputStream(u)?.use { i -> f.outputStream().use { i.copyTo(it) } }
-                            if (f.isFile && !set.contains(f)) set = set + f
+        if (uris.isNotEmpty()) {
+            busyName = "선택한 파일"   // picker 직후 staging 단계부터 spinner
+            scope.launch {
+                val outcome = runCatching {
+                    val staged = withContext(Dispatchers.IO) {
+                        val first = uris.first()
+                        val name = first.nameFromUri(context)
+                        var set = ApkSources.stageUri(context, first, name, staging)
+                        if (uris.size > 1) {
+                            uris.drop(1).forEachIndexed { idx, u ->
+                                val f = java.io.File(staging, "${idx + 1}.apk")
+                                context.contentResolver.openInputStream(u)?.use { i -> f.outputStream().use { i.copyTo(it) } }
+                                if (f.isFile && !set.contains(f)) set = set + f
+                            }
                         }
+                        set
                     }
-                    set
+                    patchStaged(staged)
                 }
-                runPatch(staged, "선택한 파일")
-            }.onFailure { Toast.makeText(context, "불러오기 실패: ${'$'}{it.message}", Toast.LENGTH_LONG).show() }
+                busyName = null
+                outcome.onSuccess {
+                    Toast.makeText(context, "패치 완료 — 설치 탭으로 이동", Toast.LENGTH_LONG).show()
+                }.onFailure { Toast.makeText(context, "패치 실패: ${it.message}", Toast.LENGTH_LONG).show() }
+            }
         }
     }
 
@@ -180,12 +188,14 @@ fun AppListScreen(modifier: Modifier) {
                             } else {
                                 Button(
                                     enabled = busyName == null,
-                                    onClick = { scope.launch {
-                                        runCatching {
-                                            withContext(Dispatchers.IO) { ApkSources.stageDownload(context, f, staging) }
-                                        }.onSuccess { staged -> runPatch(staged, f.name) }
-                                            .onFailure { Toast.makeText(context, "불러오기 실패: ${it.message}", Toast.LENGTH_LONG).show() }
-                                    } },
+                                    onClick = {
+                                        withBusy(f.name) {
+                                            val staged = withContext(Dispatchers.IO) {
+                                                ApkSources.stageDownload(context, f, staging)
+                                            }
+                                            patchStaged(staged)
+                                        }
+                                    },
                                 ) { Text("패치") }
                             }
                         }
