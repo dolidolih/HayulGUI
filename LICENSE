@@ -3,10 +3,12 @@ MIT License
 Copyright (c) 2026 dolidolih
 
 Portions of this software are a derivative work of Hayul
-(https://github.com/ye-seola/Hayul) and incorporate concepts from its
-associated projects (HayulBasicStub, SigKill, apksig). Upstream Hayul does not
-carry an explicit license statement; this license applies to the original
-authorship of the HayulGUI port.
+(https://github.com/ye-seola/Hayul) and draw on its associated projects:
+HayulBasicStub and SigKill (signature-hook concept, reimplemented clean-room),
+zipalign-java (zip alignment semantics, inspiration only). Upstream Hayul does
+not carry an explicit license statement; this license applies to the original
+authorship of the HayulGUI port. Third-party dependencies retain their own
+licenses — notably apksig (Apache-2.0, see NOTICE).
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

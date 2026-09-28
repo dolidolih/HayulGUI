@@ -66,9 +66,23 @@ minSdk 26, target/compile SDK 35. No root or adb needed on the target device.
 
 ## Acknowledgements
 
+HayulGUI is a fork/Android port of the original desktop tool and stands on the
+ideas of several projects:
+
 - [ye-seola/Hayul](https://github.com/ye-seola/Hayul) — original desktop tool,
-  the whole patching concept comes from there.
+  the whole patching concept comes from there
+- [ye-seola/HayulBasicStub](https://github.com/ye-seola/HayulBasicStub) —
+  reference stub; our `:stub` is a clean-room reimplementation
+- [xxxyanchenxxx/SigKill](https://github.com/xxxyanchenxxx/SigKill) — the
+  signature-hook pattern our `SigHook` reimplements (no code reused)
+- [iyxan23/zipalign-java](https://github.com/iyxan23/zipalign-java) — inspiration
+  for zip alignment semantics
+- [AOSP apksig](https://android.googlesource.com/platform/tools/apksig) — used
+  directly as a dependency (`com.android.tools.build:apksig`, Apache-2.0) for
+  APK signing and verification
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Includes attribution to the original Hayul project.
+MIT — see [LICENSE](LICENSE). The apksig dependency remains under its
+Apache-2.0 terms (see NOTICE); the stub reimplements patterns credited above
+without copying code from them.
