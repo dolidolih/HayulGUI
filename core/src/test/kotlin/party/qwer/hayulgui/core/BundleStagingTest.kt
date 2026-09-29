@@ -1,5 +1,6 @@
 package party.qwer.hayulgui.core
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -71,5 +72,36 @@ class BundleStagingTest {
         assertEquals(2, out.size)
         assertEquals("base.apk", out[0].name)
         assertEquals(listOf("split_config.xxhdpi.apk"), out.drop(1).map { it.name })
+    }
+
+    /** apkpure 스타일 회귀: STORED + data-descriptor 항목은 ZipInputStream 은 거부하므로 ZipFile 로 푼다. */
+    @Test fun storesWithDescriptorUnpacks() {
+        val f = File(tmp.root, "storeddesc.xapk")
+        val payload = "PAYLOAD".toByteArray()
+        val name = "com.test.app.apk".toByteArray()
+        val crc = java.util.zip.CRC32().apply { update(payload) }.value
+        fun le16(v: Int) = byteArrayOf(v.toByte(), (v shr 8).toByte())
+        fun le32(v: Int) = le16(v) + le16(v shr 16)
+        java.io.RandomAccessFile(f, "rw").use { raf ->
+            // local header: flag=0x08, sizes=0, then data + descriptor
+            raf.write(le32(0x04034b50)); raf.write(le16(20)); raf.write(le16(0x0008)); raf.write(le16(0))
+            raf.write(le16(0)); raf.write(le16(0)); raf.write(le32(0)); raf.write(le32(0)); raf.write(le32(0))
+            raf.write(le16(name.size)); raf.write(le16(0)); raf.write(name); raf.write(payload)
+            raf.write(le32(0x08074b50)); raf.write(le32(crc.toInt())); raf.write(le32(payload.size)); raf.write(le32(payload.size))
+            val cdStart = raf.filePointer
+            // central directory entry: sizes/offsets known here
+            raf.write(le32(0x02014b50)); raf.write(le16(20)); raf.write(le16(20)); raf.write(le16(0x0008)); raf.write(le16(0))
+            raf.write(le16(0)); raf.write(le16(0)); raf.write(le32(crc.toInt())); raf.write(le32(payload.size)); raf.write(le32(payload.size))
+            raf.write(le16(name.size)); raf.write(le16(0)); raf.write(le16(0)); raf.write(le16(0)); raf.write(le16(0))
+            raf.write(le32(0)); raf.write(le32(0)); raf.write(name)
+            val cdSize = raf.filePointer - cdStart
+            raf.write(le32(0x06054b50)); raf.write(le16(0)); raf.write(le16(0))  // disk, cd-disk
+            raf.write(le16(1)); raf.write(le16(1))                                 // entries, total
+            raf.write(le32(cdSize.toInt())); raf.write(le32(cdStart.toInt())); raf.write(le16(0))
+        }
+        val staging = File(tmp.root, "staging")
+        val out = ApkSources.finishStaging(f, staging)
+        assertEquals(1, out.size)
+        assertArrayEquals(payload, out[0].readBytes())
     }
 }

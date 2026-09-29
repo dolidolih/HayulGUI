@@ -180,20 +180,9 @@ object ApkSources {
         val dir = File(stagingDir, "unpacked")
         dir.mkdirs()
         val nested = ArrayList<File>()
-        java.util.zip.ZipInputStream(java.io.FileInputStream(archive)).use { zin ->
-            while (true) {
-                val e = zin.nextEntry ?: break
-                if (e.isDirectory) continue
-                val n = e.name.substringAfterLast('/')
-                val ln = n.lowercase()
-                when {
-                    ln.endsWith(".apk") -> File(dir, n).outputStream().use { zin.copyTo(it) }
-                    // apkm: 실제 apk 세트를 안쪽에 zip으로 감추는 경우가 있음 — 한 번 더 푼다
-                    setOf(".xapk", ".apks", ".apkm", ".zip").any { ln.endsWith(it) } -> nested +=
-                        File(dir, "nested_" + nested.size + ".zip").also { f -> zin.copyTo(f.outputStream()) }
-                }
-            }
-        }
+        // central-directory 방식 (ZipFile): STORED+data-descriptor 항목도 읽는다 —
+        // 일부 xapk 제조자는 STORED+EXT 형태를 쓰는데 ZipInputStream 은 거부한다.
+        copyZipInto(java.util.zip.ZipFile(archive), dir, nested)
         var apks = dir.listFiles { f: File -> f.isFile && f.name.lowercase().endsWith(".apk") }
             ?.toList() ?: emptyList()
         if (apks.isEmpty() && nested.isNotEmpty()) {
@@ -205,10 +194,12 @@ object ApkSources {
             if (!single.name.equals(archive.name)) archive.copyTo(single, overwrite = true)
             return listOf(single)
         }
-        // base: exact base.apk > apkmirror 의 base.x.apk > 단 하나
+        // base: exact base.apk > apkmirror 의 base.x.apk > 단 하나 > 가장 큰 apk
+        // (apkpure 의 xapk 는 base 를 package 명으로 심는다; config split 은 항상 더 작다)
         val base = apks.firstOrNull { it.name.equals("base.apk", true) }
             ?: apks.firstOrNull { Regex("^base(\\.[\\w-]+)?\\.apk$", RegexOption.IGNORE_CASE).matches(it.name) }
             ?: apks.singleOrNull()
+            ?: apks.maxByOrNull { it.length() }
             ?: throw IllegalStateException("base.apk 를 찾을 수 없습니다 (${apks.joinToString { it.name }})")
         // 패키지 다른 이물질(apkm 의 pure_installer.apk 등) 배제 — 판독 불가 conservative 유지
         val basePkg = packageOf(base)
@@ -222,19 +213,37 @@ object ApkSources {
 
     private fun unpackInto(nestedZip: File, into: File): List<File> {
         val out = ArrayList<File>()
-        java.util.zip.ZipInputStream(java.io.FileInputStream(nestedZip)).use { zin ->
-            while (true) {
-                val e = zin.nextEntry ?: break
-                if (e.isDirectory) continue
+        java.util.zip.ZipFile(nestedZip).use { zf ->
+            zf.entries().toList().forEach { e ->
+                if (e.isDirectory) return@forEach
                 val n = e.name.substringAfterLast('/')
                 if (n.lowercase().endsWith(".apk")) {
                     val f = File(into, n)
-                    f.outputStream().use { zin.copyTo(it) }
+                    f.outputStream().use { zf.getInputStream(e).copyTo(it) }
                     out += f
                 }
             }
         }
         return out
+    }
+
+    /** ZipFile entries 만 into 에 푼다. nestedOut 에 재-압축 후보를 받는다. */
+    private fun copyZipInto(zf: java.util.zip.ZipFile, into: File, nestedOut: ArrayList<File>) {
+        try {
+            zf.entries().toList().forEach { e ->
+                if (e.isDirectory) return@forEach
+                val n = e.name.substringAfterLast('/')
+                val ln = n.lowercase()
+                when {
+                    ln.endsWith(".apk") ->
+                        File(into, n).outputStream().use { zf.getInputStream(e).copyTo(it) }
+                    setOf(".xapk", ".apks", ".apkm", ".zip").any { ln.endsWith(it) } -> nestedOut +=
+                        File(into, "nested_" + nestedOut.size + ".zip").also { f ->
+                            f.outputStream().use { zf.getInputStream(e).copyTo(it) }
+                        }
+                }
+            }
+        } finally { zf.close() }
     }
 
     private fun safeName(n: String) = n.replace(Regex("[/\\:]"), "_")
